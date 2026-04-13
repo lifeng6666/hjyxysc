@@ -16,14 +16,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import NoAlertPresentException, UnexpectedAlertPresentException, TimeoutException
 
-# 导入SM2加密方法
-try:
-    from Utils import pwdEncrypt
-    print("✅ 成功加载 SM2 加密依赖")
-except ImportError:
-    print("❌ 错误: 未找到 Utils.py ，请确保同目录下存在该文件")
-    sys.exit(1)
-
+from Utils import pwdEncrypt
 
 def log(msg, show_time=True):
     """带时间戳的日志输出"""
@@ -77,7 +70,6 @@ def create_chrome_driver(user_data_dir=None):
     })
     
     return driver
-
 
 def call_aliv3min_with_timeout(timeout_seconds=180, max_retries=18):
     """调用 AliV3min.py 获取 captchaTicket - 最多重试18次"""
@@ -210,7 +202,6 @@ def call_aliv3min_with_timeout(timeout_seconds=180, max_retries=18):
     log("❌ 登录脚本存在异常")
     sys.exit(1)
 
-
 def send_request_via_browser(driver, url, method='POST', body=None):
     """通过浏览器控制台发送请求"""
     try:
@@ -268,7 +259,6 @@ def perform_init_session(driver, max_retries=3):
                 log(f"⚠ 初始化会话失败，等待2秒后重试...")
                 time.sleep(2)
     return False
-
 
 def login_with_password(driver, username, password, captcha_ticket):
     """登录"""
@@ -409,7 +399,6 @@ def extract_real_exam_url(driver, retry_attempt=0):
 
     return None
 
-
 def click_start_exam_button(driver):
     """点击开始答题 (在顶层窗口)"""
     log(f"🔍 检查开始答题按钮...")
@@ -430,7 +419,6 @@ def click_start_exam_button(driver):
     log("❌ 未找到开始答题按钮")
     return False
 
-
 def handle_possible_alerts(driver):
     try:
         alert = driver.switch_to.alert
@@ -442,16 +430,15 @@ def handle_possible_alerts(driver):
     except Exception:
         return False
 
-
-def inject_dati_js(driver):
-    """读取并注入 dati.js"""
-    log("💉 正在注入 dati.js 答题脚本...")
+def inject_exam_js(driver):
+    """读取并注入 exam.js"""
+    log("💉 正在注入 exam.js 答题脚本...")
     try:
-        if not os.path.exists('dati.js'):
-            log("❌ 错误: 当前目录下找不到 dati.js 文件")
+        if not os.path.exists('exam.js'):
+            log("❌ 错误: 当前目录下找不到 exam.js 文件")
             return False
             
-        with open('dati.js', 'r', encoding='utf-8') as f:
+        with open('exam.js', 'r', encoding='utf-8') as f:
             js_content = f.read()
             
         # 注入 JS
@@ -461,7 +448,6 @@ def inject_dati_js(driver):
     except Exception as e:
         log(f"❌ 注入脚本失败: {e}")
         return False
-
 
 def wait_for_exam_completion_with_js(driver, timeout_seconds=180):
     """
@@ -492,7 +478,7 @@ def wait_for_exam_completion_with_js(driver, timeout_seconds=180):
             if 'exam_start' in current_url and not js_injected:
                 # 稍微等待页面加载
                 time.sleep(2)
-                if inject_dati_js(driver):
+                if inject_exam_js(driver):
                     js_injected = True
                 else:
                     # 注入失败，可能需要重试或者直接退出
@@ -507,7 +493,6 @@ def wait_for_exam_completion_with_js(driver, timeout_seconds=180):
     
     log("⏰ 等待超时，未检测到结果页 URL")
     return False
-
 
 def get_exam_score(driver):
     """获取分数"""
@@ -536,7 +521,6 @@ def get_exam_score(driver):
     except Exception as e:
         log(f"❌ 获取分数失败: {e}")
     return None
-
 
 def perform_exam_process(driver, max_retries=3):
     """
@@ -608,7 +592,6 @@ def perform_exam_process(driver, max_retries=3):
     
     return False, None
 
-
 def perform_login_flow(driver, username, password, max_retries=3):
     """
     执行完整的登录流程（包括Session初始化、登录、验证）
@@ -673,23 +656,9 @@ def perform_login_flow(driver, username, password, max_retries=3):
     
     return 'login_failed'
 
-
 def process_single_account(username, password, account_index, total_accounts):
     """处理单个账号 - 支持多密码重试和断点记忆"""
     backup_passwords = [
-        "jlc476743",
-        "Ss123123"
-
-        # "Aa123123",
-        # "Zz123123",
-        # "Qq123123",
-        # "Ss123123",
-        # "Xx123123",
-        # "Yuanxd20031024",
-        # "jjl1775774A",
-        # "qeowowe5472",
-        # "Wyf349817236",
-        # "Bb123123"
     ]
     
     # 构建密码候选列表（去重并保持顺序，优先尝试传入的密码）
@@ -800,7 +769,6 @@ def process_single_account(username, password, account_index, total_accounts):
     result['failure_reason'] = '多次尝试登录或答题均失败(非密码错误)'
     return result
 
-
 def main():
     if len(sys.argv) < 3:
         print("用法: python jlc.py 账号1,账号2... 密码1,密码2... [失败退出标志]")
@@ -880,7 +848,7 @@ def main():
             if i < len(failed_accounts) - 1:
                 time.sleep(3)
         
-    log("\n" + "="*40, show_time=False)
+    log("="*40, show_time=False)
     log("📊 立创答题结果总结", show_time=False)
     log("="*40, show_time=False)
     

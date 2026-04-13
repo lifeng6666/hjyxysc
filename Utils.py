@@ -1,20 +1,12 @@
 import subprocess
+import execjs
 from functools import partial
 
 subprocess.Popen = partial(subprocess.Popen, encoding='utf-8', errors='ignore')
-import execjs
-
 
 def MatchArgs(ver):
-    name_part = ver.split('/')[1]  # sg.057.a3c65188d8471228.js
-    # 去掉.js扩展名
-    name_without_ext = name_part[:-3]  # sg.057.a3c65188d8471228
-    # 按点分割
-    parts = name_without_ext.split('.')  # ['sg', '057', 'a3c65188d8471228']
-
-    ver = parts[1]  # 057
-
-    print('ver', ver)
+    # sg.057.a3c65188d8471228.js
+    ver = ver.split('/')[1].split('.')[1] #057
 
     storage = {
         "069": "7sgj4pa0sqsoim5y",
@@ -68,7 +60,11 @@ def MatchArgs(ver):
 
 
 def pwdEncrypt(plain_text):
-    with open('pwd.js', 'r', encoding='utf-8') as f:
-        js_code = f.read()
+    js_code = '''
+    function pwdEncrypt(pwd) {
+        const SM2Utils = require('./sm2');
+        return SM2Utils.encs("043b2759c70dab4718520cad55ac41eea6f8922c1309afb788f7578b3e585b167811023effefc2b9193cd93ae9c9a2a864e5fffbf7517c679f40cbf4c4630aa28c", pwd, 1);
+    }
+    '''
     ctx = execjs.compile(js_code)
     return ctx.call('pwdEncrypt', plain_text)

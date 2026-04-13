@@ -17,13 +17,8 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException
 
-# 导入 SM2 加密依赖
-try:
-    from Utils import pwdEncrypt
-    print("✅ 成功加载 SM2 加密依赖")
-except ImportError:
-    print("❌ 错误: 未找到 Utils.py，请确保同目录下存在该文件")
-    sys.exit(1)
+from Utils import pwdEncrypt
+
 
 # 尝试导入 serverchan3
 try:
@@ -155,11 +150,10 @@ def create_chrome_driver(user_data_dir=None):
 
 
 # ======================== 登录相关========================
-def call_aliv3min_with_timeout(timeout_seconds=180, max_retries=18):
+def call_aliv3min_with_timeout(timeout_seconds=180, max_retries=10):
     """调用 AliV3min.py 获取 captchaTicket"""
     for attempt in range(max_retries):
         log(f"📞 正在调用登录脚本获取 captchaTicket (尝试 {attempt + 1}/{max_retries})...")
-        process = None
         try:
             if not os.path.exists("AliV3min.py"):
                 log("❌ 错误: 找不到登录依赖 AliV3min.py")

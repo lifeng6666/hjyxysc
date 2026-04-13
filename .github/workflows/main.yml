@@ -234,6 +234,30 @@ jobs:
         run: |
           python ./jlc_summary.py
 
+      - name: '获取并修改生成的Excel文件名'
+        id: get-excel
+        run: |
+          excel_file=$(ls *.xlsx 2>/dev/null | head -1)
+          if [ -n "$excel_file" ]; then
+            date_str=$(date +%Y%m%d)
+            new_name="${date_str}_jlc_gold_beans_ranking.xlsx"
+            mv "$excel_file" "$new_name"
+            echo "excel_file=$new_name" >> $GITHUB_OUTPUT
+            echo "重命名: $excel_file -> $new_name"
+          else
+            echo "未找到Excel文件"
+            echo "excel_file=" >> $GITHUB_OUTPUT
+          fi
+
+      - name: '上传金豆排名Excel'
+        if: steps.get-excel.outputs.excel_file != ''
+        uses: actions/upload-artifact@v7
+        with:
+          path: ${{ steps.get-excel.outputs.excel_file }}
+          if-no-files-found: ignore
+          archive: false
+          retention-days: 5
+
       - name: '清理 GitHub 界面的临时 JSON Artifacts'
         uses: geekyeggo/delete-artifact@v6
         with:
