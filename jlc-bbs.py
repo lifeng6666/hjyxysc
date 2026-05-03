@@ -62,7 +62,7 @@ def get_valid_proxy(account_proxy_fails):
     if account_proxy_fails >= 100:
         return None, account_proxy_fails
 
-    api_url = "http://api.dmdaili.com/dmgetip.asp?apikey=7db2f497&pwd=2051b6d39963f332116779a42367a8ef&getnum=1&httptype=1&geshi=2&fenge=1&fengefu=&operate=all"
+    api_url = "http://api.dmdaili.com/dmgetip.asp?apikey=b345ad7e&pwd=bca1fcb138fb91448d9cfe7f1099c6f6&getnum=1&httptype=1&geshi=2&fenge=1&fengefu=&operate=all"
 
     while True:
         if account_proxy_fails >= 100:
@@ -94,21 +94,8 @@ def get_valid_proxy(account_proxy_fails):
                 port = p_info.get("port")
                 city = p_info.get("city", "未知位置")
                 proxy_str = f"http://{ip}:{port}"
-                log(f"🔗 成功获取到代理: {ip}:{port} [位置: {city}]，正在进行可用性测试...")
-
-                try:
-                    test_resp = requests.get("https://m.jlc.com", proxies={"http": proxy_str, "https": proxy_str}, timeout=5)
-                    if test_resp.status_code == 200:
-                        log("✅ 代理测试成功，延迟正常")
-                        return proxy_str, account_proxy_fails
-                    else:
-                        log(f"⚠ 代理测试失败 (HTTP {test_resp.status_code})，重新获取IP...")
-                        account_proxy_fails += 1
-                        continue 
-                except Exception:
-                    log(f"⚠ 代理测试请求超时或连接失败，重新获取IP...")
-                    account_proxy_fails += 1
-                    continue 
+                log(f"🔗 成功获取到代理: {ip}:{port}[位置: {city}]，正在发送请求...")
+                return proxy_str, account_proxy_fails
             else:
                 log(f"⚠ 获取代理失败，API返回内容: {data}")
                 account_proxy_fails += 1
@@ -639,37 +626,55 @@ def get_sign_info(driver, secretkey, label="", max_retries=3):
     return {"success": False, "error": "请求失败"}
 
 
-def do_sign_in(driver, secretkey, proxy_str=None, max_retries=3):
+def do_sign_in(driver, secretkey, account_proxy_state, max_retries=3):
     """执行签到"""
-    cookies = {c['name']: c['value'] for c in driver.get_cookies()} if proxy_str else None
-    headers = {
-        'Content-Type': 'application/json',
-        'secretkey': secretkey,
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    } if proxy_str else None
-    proxies = {"http": proxy_str, "https": proxy_str} if proxy_str else None
-
     for attempt in range(max_retries):
+        resp = None
         try:
-            if proxy_str:
-                resp_obj = requests.post(
-                    "https://www.jlc-bbs.com/api/bbs/signInRecordWeb/signIn",
-                    json={"signInContent": "", "signInExpression": ""},
-                    headers=headers,
-                    cookies=cookies,
-                    proxies=proxies,
-                    timeout=15
-                )
-                resp = resp_obj.json()
-            else:
-                resp = send_bbs_request(
-                    driver,
-                    "https://www.jlc-bbs.com/api/bbs/signInRecordWeb/signIn",
-                    "POST",
-                    {"signInContent": "", "signInExpression": ""},
-                    secretkey,
-                    max_retries=1,
-                )
+            while True:
+                proxy_str, account_proxy_state["fails"] = get_valid_proxy(account_proxy_state["fails"])
+                
+                if proxy_str:
+                    cookies = {c['name']: c['value'] for c in driver.get_cookies()}
+                    headers = {
+                        'Content-Type': 'application/json',
+                        'secretkey': secretkey,
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                    }
+                    proxies = {"http": proxy_str, "https": proxy_str}
+                    
+                    try:
+                        resp_obj = requests.post(
+                            "https://www.jlc-bbs.com/api/bbs/signInRecordWeb/signIn",
+                            json={"signInContent": "", "signInExpression": ""},
+                            headers=headers,
+                            cookies=cookies,
+                            proxies=proxies,
+                            timeout=15
+                        )
+                        resp = resp_obj.json()
+                        account_proxy_state["used_success"] = True
+                        break
+                    except requests.exceptions.ConnectTimeout as e:
+                        log(f"⚠ 代理无效 (连接超时): {e}，重新获取代理...")
+                    except requests.exceptions.ReadTimeout as e:
+                        log(f"⚠ 代理无效 (响应超时): {e}，重新获取代理...")
+                    except requests.exceptions.ProxyError as e:
+                        log(f"⚠ 代理无效 (代理连接失败/拒绝连接): {e}，重新获取代理...")
+                    except requests.exceptions.ConnectionError as e:
+                        log(f"⚠ 代理无效 (网络连接错误/拒绝连接): {e}，重新获取代理...")
+                    except Exception as e:
+                        log(f"⚠ 代理无效 (请求异常): {e}，重新获取代理...")
+                else:
+                    resp = send_bbs_request(
+                        driver,
+                        "https://www.jlc-bbs.com/api/bbs/signInRecordWeb/signIn",
+                        "POST",
+                        {"signInContent": "", "signInExpression": ""},
+                        secretkey,
+                        max_retries=1,
+                    )
+                    break
 
             if resp:
                 if resp.get("success") and resp.get("code") == 200:
@@ -736,37 +741,56 @@ def get_remaining_lottery_times(driver, max_retries=3):
     return {"success": False, "error": "无法从页面提取抽奖次数"}
 
 
-def do_lottery(driver, secretkey, proxy_str=None):
+def do_lottery(driver, secretkey, account_proxy_state):
     """执行单次抽奖"""
-    cookies = {c['name']: c['value'] for c in driver.get_cookies()} if proxy_str else None
-    headers = {
-        'Content-Type': 'application/json',
-        'secretkey': secretkey,
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    } if proxy_str else None
-    proxies = {"http": proxy_str, "https": proxy_str} if proxy_str else None
-
     for attempt in range(2):
+        resp = None
         try:
-            if proxy_str:
-                resp_obj = requests.post(
-                    "https://www.jlc-bbs.com/api/bbs/luckyDrawActivityRecord/executeLuckDraw",
-                    json={"luckyDrawActivityAccessId": "ab69ff00332949328ba578c086d42141"},
-                    headers=headers,
-                    cookies=cookies,
-                    proxies=proxies,
-                    timeout=15
-                )
-                resp = resp_obj.json()
-            else:
-                resp = send_bbs_request(
-                    driver,
-                    "https://www.jlc-bbs.com/api/bbs/luckyDrawActivityRecord/executeLuckDraw",
-                    "POST",
-                    {"luckyDrawActivityAccessId": "ab69ff00332949328ba578c086d42141"},
-                    secretkey,
-                    max_retries=1,
-                )
+            while True:
+                proxy_str, account_proxy_state["fails"] = get_valid_proxy(account_proxy_state["fails"])
+                
+                if proxy_str:
+                    cookies = {c['name']: c['value'] for c in driver.get_cookies()}
+                    headers = {
+                        'Content-Type': 'application/json',
+                        'secretkey': secretkey,
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                    }
+                    proxies = {"http": proxy_str, "https": proxy_str}
+                    
+                    try:
+                        resp_obj = requests.post(
+                            "https://www.jlc-bbs.com/api/bbs/luckyDrawActivityRecord/executeLuckDraw",
+                            json={"luckyDrawActivityAccessId": "ab69ff00332949328ba578c086d42141"},
+                            headers=headers,
+                            cookies=cookies,
+                            proxies=proxies,
+                            timeout=15
+                        )
+                        resp = resp_obj.json()
+                        account_proxy_state["used_success"] = True
+                        break
+                    except requests.exceptions.ConnectTimeout as e:
+                        log(f"⚠ 代理无效 (连接超时): {e}，重新获取代理...")
+                    except requests.exceptions.ReadTimeout as e:
+                        log(f"⚠ 代理无效 (响应超时): {e}，重新获取代理...")
+                    except requests.exceptions.ProxyError as e:
+                        log(f"⚠ 代理无效 (代理连接失败/拒绝连接): {e}，重新获取代理...")
+                    except requests.exceptions.ConnectionError as e:
+                        log(f"⚠ 代理无效 (网络连接错误/拒绝连接): {e}，重新获取代理...")
+                    except Exception as e:
+                        log(f"⚠ 代理无效 (请求异常): {e}，重新获取代理...")
+                else:
+                    resp = send_bbs_request(
+                        driver,
+                        "https://www.jlc-bbs.com/api/bbs/luckyDrawActivityRecord/executeLuckDraw",
+                        "POST",
+                        {"luckyDrawActivityAccessId": "ab69ff00332949328ba578c086d42141"},
+                        secretkey,
+                        max_retries=1,
+                    )
+                    break
+            
             if resp:
                 if resp.get("success") and resp.get("code") == 200:
                     name = resp.get("data", {}).get("name", "未知奖品")
@@ -811,8 +835,7 @@ def get_koi_cards(driver, secretkey, max_retries=3):
 def process_single_account(username, password, account_index, total_accounts, start_pwd_idx=0):
     """处理单个账号的完整流程，包含密码重试及断点记忆"""
     global CONSECUTIVE_PROXY_ACCOUNT_FAILS, GLOBAL_PROXY_DISABLE
-    backup_passwords = [
-    ]
+    backup_passwords = []
     
     all_passwords = [password]
     for bp in backup_passwords:
@@ -821,6 +844,7 @@ def process_single_account(username, password, account_index, total_accounts, st
 
     result = {
         "account_index": account_index,
+        "username": username,
         "password_error": False,
         "login_error": False,
         "has_error": False,
@@ -848,8 +872,7 @@ def process_single_account(username, password, account_index, total_accounts, st
     }
 
     current_pwd_idx = start_pwd_idx
-    account_proxy_fails = 0
-    proxy_used_successfully = False
+    account_proxy_state = {"fails": 0, "used_success": False}
 
     while current_pwd_idx < len(all_passwords):
         current_password = all_passwords[current_pwd_idx]
@@ -915,11 +938,8 @@ def process_single_account(username, password, account_index, total_accounts, st
 
             # 2. 执行签到
             log("📡 准备执行签到...")
-            sign_proxy_str, account_proxy_fails = get_valid_proxy(account_proxy_fails)
-            if sign_proxy_str:
-                proxy_used_successfully = True
 
-            sign_result = do_sign_in(driver, secretkey, sign_proxy_str)
+            sign_result = do_sign_in(driver, secretkey, account_proxy_state)
             result["sign_status"] = sign_result["status"]
 
             if sign_result["status"] == "success":
@@ -994,15 +1014,12 @@ def process_single_account(username, password, account_index, total_accounts, st
             else:
                 # 执行抽奖循环
                 log("🎰 开始准备抽奖...")
-                lot_proxy_str, account_proxy_fails = get_valid_proxy(account_proxy_fails)
-                if lot_proxy_str:
-                    proxy_used_successfully = True
 
                 result["lottery_status"] = "success"
                 lottery_count = 0
 
                 while True:
-                    lottery_result = do_lottery(driver, secretkey, lot_proxy_str)
+                    lottery_result = do_lottery(driver, secretkey, account_proxy_state)
 
                     if lottery_result["status"] == "success":
                         lottery_count += 1
@@ -1058,14 +1075,14 @@ def process_single_account(username, password, account_index, total_accounts, st
             return result
             
         finally:
-            if account_proxy_fails >= 100 and not proxy_used_successfully:
+            if account_proxy_state["fails"] >= 100 and not account_proxy_state["used_success"]:
                 CONSECUTIVE_PROXY_ACCOUNT_FAILS += 1
                 log(f"⚠ 该账号未能成功挂上任何可用代理，当前连续获取代理失败账号数: {CONSECUTIVE_PROXY_ACCOUNT_FAILS}")
                 if CONSECUTIVE_PROXY_ACCOUNT_FAILS >= 5 and not GLOBAL_PROXY_DISABLE:
                     GLOBAL_PROXY_DISABLE = True
                     log("❌ 连续5个账号获取代理失败，已触发保护机制，后续所有账号将全部放弃代理使用本地IP")
             else:
-                if proxy_used_successfully:
+                if account_proxy_state["used_success"]:
                     CONSECUTIVE_PROXY_ACCOUNT_FAILS = 0
                     
             if driver:
@@ -1327,15 +1344,15 @@ def main():
     any_error = False
 
     for res in all_results:
-        idx = res["account_index"]
+        uname = res.get("username", res["account_index"])
         log("--------------------------------------------------", show_time=False)
-        log(f"账号{idx}:", show_time=False)
+        log(f"账号{uname}:", show_time=False)
 
         # === 密码错误 ===
         if res.get("password_error"):
             log("├── 状态: ❌ 账号或密码错误，已跳过", show_time=False)
             any_error = True
-            push_reasons.append(f"账号{idx}密码错误")
+            push_reasons.append(f"账号{uname}密码错误")
             log("--------------------------------------------------", show_time=False)
             continue
 
@@ -1343,7 +1360,7 @@ def main():
         if res.get("login_error"):
             log(f"├── 状态: ❌ 登录失败 ({res.get('error_msg', '未知')})", show_time=False)
             any_error = True
-            push_reasons.append(f"账号{idx}登录异常")
+            push_reasons.append(f"账号{uname}登录异常")
             log("--------------------------------------------------", show_time=False)
             continue
 
@@ -1365,16 +1382,16 @@ def main():
         elif sign_status == "failed":
             sign_str = f"签到失败，原因: {res.get('sign_error_msg', '未知')}"
             any_error = True
-            push_reasons.append(f"账号{idx}签到失败")
+            push_reasons.append(f"账号{uname}签到失败")
         elif res.get("has_error") and res.get("error_msg"):
             sign_str = f"运行异常: {res.get('error_msg')}"
             any_error = True
-            push_reasons.append(f"账号{idx}运行失败")
+            push_reasons.append(f"账号{uname}运行失败")
         else:
             sign_str = "未执行"
             if res.get("has_error"):
                 any_error = True
-                push_reasons.append(f"账号{idx}运行失败")
+                push_reasons.append(f"账号{uname}运行失败")
 
         log(f"├── 签到积分变化: {sign_str}", show_time=False)
 
@@ -1397,7 +1414,7 @@ def main():
             err_msg = res.get("lottery_error_msg", "")
             if "积分" not in err_msg and "次数" not in err_msg:
                 any_error = True
-                push_reasons.append(f"账号{idx}抽奖异常")
+                push_reasons.append(f"账号{uname}抽奖异常")
         else:
             lottery_str = "未执行"
 
@@ -1424,16 +1441,16 @@ def main():
             log(f"├── 抽奖{pi}奖品: {prize}", show_time=False)
             # 检查是否中了非积分且非鲤鱼卡的奖品
             if "积分" not in prize and "鲤鱼卡" not in prize:
-                push_reasons.append(f"账号{idx}中奖{prize}")
+                push_reasons.append(f"账号{uname}中奖{prize}")
 
         log("--------------------------------------------------", show_time=False)
 
     # === 整体异常判断（处理 has_error 但前面可能未捕获的情况）===
     for res in all_results:
-        idx = res["account_index"]
+        uname = res.get("username", res["account_index"])
         if res.get("has_error") and not res.get("password_error") and not res.get("login_error"):
-            reason_str = f"账号{idx}运行失败"
-            if reason_str not in push_reasons and f"账号{idx}签到失败" not in push_reasons and f"账号{idx}抽奖异常" not in push_reasons:
+            reason_str = f"账号{uname}运行失败"
+            if reason_str not in push_reasons and f"账号{uname}签到失败" not in push_reasons and f"账号{uname}抽奖异常" not in push_reasons:
                 any_error = True
                 push_reasons.append(reason_str)
 

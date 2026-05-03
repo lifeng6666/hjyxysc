@@ -3,7 +3,7 @@ name: 嘉立创自动签到
 on:
   workflow_dispatch: # 手动触发
   schedule:
-    # 触发时间 (北京时间 06:00)
+    # 触发时间 (北京时间 05:00)
     - cron: '0 21 * * *'
 
 env:
@@ -85,18 +85,6 @@ jobs:
         include: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
 
     name: 账号组${{ matrix.index }}
-
-    # 注入环境变量
-    env:
-      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-      WECHAT_WEBHOOK_KEY: ${{ secrets.WECHAT_WEBHOOK_KEY }}
-      DINGTALK_WEBHOOK: ${{ secrets.DINGTALK_WEBHOOK }}
-      PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
-      SERVERCHAN_SCKEY: ${{ secrets.SERVERCHAN_SCKEY }}
-      SERVERCHAN3_SCKEY: ${{ secrets.SERVERCHAN3_SCKEY }}
-      COOLPUSH_SKEY: ${{ secrets.COOLPUSH_SKEY }}
-      CUSTOM_WEBHOOK: ${{ secrets.CUSTOM_WEBHOOK }}
 
     steps:
       - name: '检出代码'
@@ -236,6 +224,30 @@ jobs:
       - name: '运行汇总脚本'
         run: |
           python ./jlc_summary.py
+
+      - name: '获取并修改生成的Excel文件名'
+        id: get-excel
+        run: |
+          excel_file=$(ls *.xlsx 2>/dev/null | head -1)
+          if [ -n "$excel_file" ]; then
+            date_str=$(date +%Y%m%d)
+            new_name="${date_str}_jlc_gold_beans_ranking.xlsx"
+            mv "$excel_file" "$new_name"
+            echo "excel_file=$new_name" >> $GITHUB_OUTPUT
+            echo "重命名: $excel_file -> $new_name"
+          else
+            echo "未找到Excel文件"
+            echo "excel_file=" >> $GITHUB_OUTPUT
+          fi
+
+      - name: '上传金豆排名Excel'
+        if: steps.get-excel.outputs.excel_file != ''
+        uses: actions/upload-artifact@v7
+        with:
+          path: ${{ steps.get-excel.outputs.excel_file }}
+          if-no-files-found: ignore
+          archive: false
+          retention-days: 5
 
       - name: '清理 GitHub 界面的临时 JSON Artifacts'
         uses: geekyeggo/delete-artifact@v6

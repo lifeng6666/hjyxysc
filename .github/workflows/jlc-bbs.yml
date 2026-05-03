@@ -1,4 +1,4 @@
-name: 立创社区自动签到抽奖
+name: 立创社区自动签到抽奖脚本
 
 on:
   workflow_dispatch: # 手动触发
@@ -9,7 +9,7 @@ on:
 jobs:
   # ==================================================================================
   # 数据预处理
-  # 读取 Secret JLC_ACCOUNT，清洗数据，按50个一组生成矩阵 JSON
+  # 读取 Secret JLC_BBS_ACCOUNT，清洗数据，按50个一组生成矩阵 JSON
   # ==================================================================================
   generate-matrix:
     runs-on: ubuntu-latest
@@ -19,7 +19,7 @@ jobs:
       - name: 解析账号并分组
         id: set-matrix
         env:
-          RAW_ACCOUNTS: ${{ secrets.JLC_ACCOUNT }}
+          RAW_ACCOUNTS: ${{ secrets.JLC_BBS_ACCOUNT }}
         shell: python
         run: |
           import os
@@ -95,6 +95,7 @@ jobs:
       - name: '检出代码'
         uses: actions/checkout@v6
 
+      # --- 环境配置部分  ---
       - name: '设置Python环境'
         uses: actions/setup-python@v6
         with:

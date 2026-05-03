@@ -187,17 +187,10 @@ def get_oshwhub_points(driver, account_index):
     log(f"账号 {account_index} - ⚠ 无法获取积分信息")
     return 0
 
-def check_proxy(proxies):
-    try:
-        res = requests.get("https://m.jlc.com", proxies=proxies, timeout=5)
-        return res.status_code == 200
-    except:
-        return False
-
 def get_valid_proxy(account_index):
-    proxy_api_url = "http://api.dmdaili.com/dmgetip.asp?apikey=7db2f497&pwd=2051b6d39963f332116779a42367a8ef&getnum=1&httptype=1&geshi=2&fenge=1&fengefu=&operate=all"
-    
-    max_attempts = 3
+    global disable_global_proxy, consecutive_proxy_fails
+    proxy_api_url = "http://api.dmdaili.com/dmgetip.asp?apikey=b345ad7e&pwd=bca1fcb138fb91448d9cfe7f1099c6f6&getnum=1&httptype=1&geshi=2&fenge=1&fengefu=&operate=all"
+    max_attempts = 100
     attempt = 0
     
     while attempt < max_attempts:
@@ -215,10 +208,12 @@ def get_valid_proxy(account_index):
 
             if data.get("code") == 605:
                 log(f"账号 {account_index} - 代理IP已自动添加到白名单，等待15秒后重试...")
+                attempt += 1
                 time.sleep(15)
                 continue 
             elif data.get("code") == 1 and "Too Many Requests" in data.get("msg", ""):
                 log(f"账号 {account_index} - 代理API请求过快，等待5秒后重试...")
+                attempt += 1
                 time.sleep(5)
                 continue
             elif data.get("code") == 0 and data.get("data"):
@@ -232,13 +227,8 @@ def get_valid_proxy(account_index):
                         "http": proxy_url,
                         "https": proxy_url
                     }
-                    if check_proxy(proxies):
-                        log(f"账号 {account_index} - ✅ 代理获取并验证成功: {ip}:{port} [{city}]")
-                        return proxies
-                    else:
-                        log(f"账号 {account_index} - ⚠ 获取到的代理不可用，准备重新获取...")
-                        attempt += 1
-                        continue
+                    log(f"账号 {account_index} - ✅ 代理获取成功: {ip}:{port}[{city}]")
+                    return proxies
             
             log(f"账号 {account_index} - ⚠ 代理获取失败，接口返回: {json.dumps(data, ensure_ascii=False)}")
             attempt += 1
@@ -248,7 +238,11 @@ def get_valid_proxy(account_index):
             attempt += 1
             time.sleep(2)
     
-    log(f"账号 {account_index} - ❌ 连续3次获取或验证代理失败，放弃使用代理")
+    log(f"账号 {account_index} - ❌ 连续100次获取代理失败，放弃使用代理")
+    consecutive_proxy_fails += 1
+    if consecutive_proxy_fails >= 5:
+        disable_global_proxy = True
+        log("⚠ 连续5次代理获取/使用失败，接下来的账号全部放弃使用代理！")
     return None
 
 class JLCClient:
@@ -272,41 +266,107 @@ class JLCClient:
         self.final_jindou = 0    # 签到后金豆数量
         self.jindou_reward = 0   # 本次获得金豆（通过差值计算）
         self.sign_status = "未知"  # 签到状态
-        self.has_reward = False  # 是否领取了额外奖励
+        self.has_weekly_reward = False  # 是否领取了普通7天奖励 (有周奖)
+        self.has_special_reward = False # 是否领取了特殊节点奖励 (有奖励)
+        self.have_receive = True # 默认True，如果在接口中探测到未领取的奖励会置为False
         
     def send_request(self, url, method='GET', use_proxy=False):
         """发送 API 请求"""
-        try:
-            # 根据 use_proxy 参数决定是否使用代理
-            req_proxies = self.proxies if use_proxy else None
+        global disable_global_proxy, consecutive_proxy_fails
+        
+        # 如果要求使用代理，但实际上还没有代理，则获取一个
+        if use_proxy and not disable_global_proxy and not self.proxies:
+            self.proxies = get_valid_proxy(self.account_index)
             
-            if method.upper() == 'GET':
-                response = requests.get(url, headers=self.headers, timeout=10, proxies=req_proxies)
-            else:
-                response = requests.post(url, headers=self.headers, timeout=10, proxies=req_proxies)
-            
-            if response.status_code == 200:
-                return response.json()
-            else:
-                log(f"账号 {self.account_index} - ❌ 请求失败，状态码: {response.status_code}")
-                return None
-        except Exception as e:
-            log(f"账号 {self.account_index} - ❌ 请求异常 ({url}): {e}")
-            return None
+        # 真正使用代理的条件：要求使用、没被禁用，且成功获取到了代理
+        is_actually_using_proxy = use_proxy and not disable_global_proxy and self.proxies is not None
+        
+        max_retries = 20 if is_actually_using_proxy else 1
+        
+        for attempt in range(max_retries):
+            try:
+                # 重新判定，因为过程中可能 disable_global_proxy 被修改
+                req_proxies = self.proxies if use_proxy and not disable_global_proxy else None
+                
+                if method.upper() == 'GET':
+                    response = requests.get(url, headers=self.headers, timeout=10, proxies=req_proxies)
+                else:
+                    response = requests.post(url, headers=self.headers, timeout=10, proxies=req_proxies)
+                
+                if response.status_code == 200:
+                    if req_proxies:
+                        consecutive_proxy_fails = 0
+                    return response.json()
+                else:
+                    log(f"账号 {self.account_index} - ❌ 请求失败，状态码: {response.status_code}")
+                    return None
+            except requests.exceptions.RequestException as e:
+                if use_proxy and not disable_global_proxy and self.proxies:
+                    if isinstance(e, requests.exceptions.ProxyError):
+                        error_type = "代理拒绝连接/代理错误"
+                    elif isinstance(e, requests.exceptions.ConnectTimeout):
+                        error_type = "连接代理超时"
+                    elif isinstance(e, requests.exceptions.ReadTimeout):
+                        error_type = "代理响应超时"
+                    elif isinstance(e, requests.exceptions.Timeout):
+                        error_type = "请求超时"
+                    elif isinstance(e, requests.exceptions.ConnectionError):
+                        error_type = "连接错误"
+                    else:
+                        error_type = "未知请求异常"
+                        
+                    log(f"账号 {self.account_index} - ⚠ 代理无效 ({error_type}: {e})，准备重新获取代理...")
+                    
+                    self.proxies = get_valid_proxy(self.account_index)
+                    if not self.proxies:
+                        break
+                else:
+                    log(f"账号 {self.account_index} - ❌ 请求异常 ({url}): {e}")
+                    return None
+        
+        if is_actually_using_proxy and self.proxies and use_proxy and not disable_global_proxy:
+            log(f"账号 {self.account_index} - ❌ 连续 {max_retries} 次代理请求失败")
+            consecutive_proxy_fails += 1
+            if consecutive_proxy_fails >= 5:
+                disable_global_proxy = True
+                log("⚠ 连续5次代理获取/使用失败，接下来的账号全部放弃使用代理！")
+                
+        return None
     
     def get_user_info(self):
         """获取用户信息"""
         log(f"账号 {self.account_index} - 获取用户信息...")
         url = f"{self.base_url}/api/appPlatform/center/setting/selectPersonalInfo"
-        data = self.send_request(url)
         
-        if data and data.get('success'):
-            log(f"账号 {self.account_index} - ✅ 用户信息获取成功")
-            return True
-        else:
-            error_msg = data.get('message', '未知错误') if data else '请求失败'
-            log(f"账号 {self.account_index} - ❌ 获取用户信息失败: {error_msg}")
-            return False
+        max_retries = 5
+        for attempt in range(max_retries):
+            data = self.send_request(url)
+            
+            if data and data.get('success'):
+                log(f"账号 {self.account_index} - ✅ 用户信息获取成功")
+                return True
+                
+            # 重试前刷新页面，重新提取 token 和 secretkey
+            if attempt < max_retries - 1:
+                try:
+                    self.driver.get("https://m.jlc.com/")
+                    self.driver.refresh()
+                    WebDriverWait(self.driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+                    time.sleep(1 + random.uniform(0, 1))
+                    navigate_and_interact_m_jlc(self.driver, self.account_index)
+                    access_token = extract_token_from_local_storage(self.driver)
+                    secretkey = extract_secretkey_from_devtools(self.driver)
+                    if access_token:
+                        self.headers['x-jlc-accesstoken'] = access_token
+                    if secretkey:
+                        self.headers['secretkey'] = secretkey
+                except:
+                    pass  # 静默继续
+        
+        error_msg = data.get('message', '未知错误') if data else '请求失败'
+        log(f"账号 {self.account_index} - ❌ 获取用户信息失败: {error_msg}")
+        self.sign_status = f"获取用户信息失败:{error_msg}"
+        return False
     
     def get_points(self):
         """获取金豆数量"""
@@ -343,29 +403,79 @@ class JLCClient:
         """检查签到状态"""
         log(f"账号 {self.account_index} - 检查签到状态...")
         url = f"{self.base_url}/api/activity/sign/getCurrentUserSignInConfig"
-        data = self.send_request(url)
+        
+        max_retries = 5
+        for attempt in range(max_retries):
+            data = self.send_request(url)
+            
+            if data and data.get('success'):
+                have_sign_in = data.get('data', {}).get('haveSignIn', False)
+                # 提取是否还有未领取的奖励，如果字段不存在默认给 True 以免误伤
+                if 'haveReceive' in data.get('data', {}):
+                    self.have_receive = data['data']['haveReceive']
+                
+                if have_sign_in and self.have_receive:
+                    log(f"账号 {self.account_index} - ✅ 今日已签到")
+                    self.sign_status = "已签到过"
+                    return True
+                else:
+                    if not self.have_receive:
+                        log(f"账号 {self.account_index} - 今日未签到 (存在未领取的特殊奖励)")
+                    else:
+                        log(f"账号 {self.account_index} - 今日未签到")
+                    self.sign_status = "未签到"
+                    return False
+                    
+            # 重试前刷新页面，重新提取 token 和 secretkey
+            if attempt < max_retries - 1:
+                try:
+                    self.driver.get("https://m.jlc.com/")
+                    self.driver.refresh()
+                    WebDriverWait(self.driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+                    time.sleep(1 + random.uniform(0, 1))
+                    navigate_and_interact_m_jlc(self.driver, self.account_index)
+                    access_token = extract_token_from_local_storage(self.driver)
+                    secretkey = extract_secretkey_from_devtools(self.driver)
+                    if access_token:
+                        self.headers['x-jlc-accesstoken'] = access_token
+                    if secretkey:
+                        self.headers['secretkey'] = secretkey
+                except:
+                    pass  # 静默继续
+        
+        error_msg = data.get('message', '未知错误') if data else '请求失败'
+        log(f"账号 {self.account_index} - ❌ 检查签到状态失败: {error_msg}")
+        self.sign_status = f"检查状态失败:{error_msg}"
+        return None
+    
+    def receive_special_reward(self):
+        """领取特殊奖励（伪装APP获取8金豆）"""
+        log(f"账号 {self.account_index} - 领取特殊奖励 (使用代理)...")
+        # ⚠️ 加上 platformType=APP 能让默认的金豆奖励翻倍到 8 个
+        url = f"{self.base_url}/api/activity/sign/receiveVoucher?platformType=APP&source=4"
+        data = self.send_request(url, use_proxy=True)
         
         if data and data.get('success'):
-            have_sign_in = data.get('data', {}).get('haveSignIn', False)
-            if have_sign_in:
-                log(f"账号 {self.account_index} - ✅ 今日已签到")
-                self.sign_status = "已签到过"
-                return True
-            else:
-                log(f"账号 {self.account_index} - 今日未签到")
-                self.sign_status = "未签到"
-                return False
+            log(f"账号 {self.account_index} - 🎉 成功领取奖励金豆")
+            self.has_special_reward = True
+            return True
         else:
             error_msg = data.get('message', '未知错误') if data else '请求失败'
-            log(f"账号 {self.account_index} - ❌ 检查签到状态失败: {error_msg}")
-            self.sign_status = "检查失败"
-            return None
-    
+            log(f"账号 {self.account_index} - ❌ 领取奖励金豆失败: {error_msg}")
+            self.sign_status = f"领取奖励金豆失败:{error_msg}"
+            return False
+
     def sign_in(self):
         """执行签到"""
+        # 1. 优先处理特殊奖励阻塞状态（如果有haveReceive=False标记）
+        if not getattr(self, 'have_receive', True):
+            log(f"账号 {self.account_index} - 检测到有奖励未领取，准备领取奖励金豆...")
+            if not self.receive_special_reward():
+                return False
+                
         log(f"账号 {self.account_index} - 执行签到 (使用代理)...")
         url = f"{self.base_url}/api/activity/sign/signIn?source=4"
-        # ⚠️ 仅在签到接口显式使用代理
+        # ⚠️ 签到及领取奖励接口显式使用代理
         data = self.send_request(url, use_proxy=True)
         
         if data and data.get('success'):
@@ -376,45 +486,82 @@ class JLCClient:
                 self.sign_status = "签到成功"
                 return True
             else:
-                # 有奖励可领取，先领取奖励
-                log(f"账号 {self.account_index} - 有奖励可领取，先领取奖励")
-                self.has_reward = True
+                # 有普通周奖可领取，先领取周奖
+                log(f"账号 {self.account_index} - 有周奖可领取，先领取周奖")
+                self.has_weekly_reward = True
                 
-                # 领取奖励
-                if self.receive_voucher():
+                # 领取普通周奖
+                voucher_success, voucher_msg = self.receive_voucher()
+                if voucher_success:
                     # 领取奖励成功后，视为签到完成
-                    log(f"账号 {self.account_index} - ✅ 奖励领取成功，签到完成")
-                    self.sign_status = "领取奖励成功"
+                    log(f"账号 {self.account_index} - ✅ 周奖领取成功，签到完成")
+                    self.sign_status = "领取周奖成功"
                     return True
                 else:
-                    self.sign_status = "领取奖励失败"
+                    self.sign_status = f"领取周奖失败:{voucher_msg}"
                     return False
         else:
             error_msg = data.get('message', '未知错误') if data else '请求失败'
+            self.message = error_msg
+            
+            # 2. 如果之前状态未探测到，但在签到时被服务端强制拦截，也执行解锁领奖
+            if "存在签到未领取" in error_msg:
+                log(f"账号 {self.account_index} - 签到触发特殊奖励阻塞，先领取奖励金豆...")
+                if self.receive_special_reward():
+                    log(f"账号 {self.account_index} - 重新执行签到...")
+                    retry_data = self.send_request(url, use_proxy=True)
+                    if retry_data and retry_data.get('success'):
+                        gain_num = retry_data.get('data', {}).get('gainNum')
+                        if gain_num:
+                            log(f"账号 {self.account_index} - ✅签到成功，签到使金豆+{gain_num}")
+                            self.sign_status = "签到成功"
+                            return True
+                        else:
+                            log(f"账号 {self.account_index} - 有周奖可领取，先领取周奖...")
+                            self.has_weekly_reward = True
+                            voucher_success, voucher_msg = self.receive_voucher()
+                            if voucher_success:
+                                log(f"账号 {self.account_index} - ✅ 周奖领取成功，签到完成")
+                                self.sign_status = "签到成功"
+                                return True
+                            else:
+                                self.sign_status = f"领取周奖失败:{voucher_msg}"
+                                return False
+                    else:
+                        retry_msg = retry_data.get('message', '未知错误') if retry_data else '请求失败'
+                        log(f"账号 {self.account_index} - ❌ 领取奖励后签到失败: {retry_msg}")
+                        self.sign_status = f"领取奖励后签到失败:{retry_msg}"
+                        return False
+                else:
+                    return False
+                    
             log(f"账号 {self.account_index} - ❌ 签到失败: {error_msg}")
-            self.sign_status = "签到失败"
+            self.sign_status = f"签到失败:{error_msg}"
             return False
     
     def receive_voucher(self):
         """领取奖励"""
-        log(f"账号 {self.account_index} - 领取奖励...")
+        log(f"账号 {self.account_index} - 领取周奖 (使用代理)...")
         url = f"{self.base_url}/api/activity/sign/receiveVoucher"
-        data = self.send_request(url)
+        # ⚠️ 签到及领取奖励接口显式使用代理
+        data = self.send_request(url, use_proxy=True)
         
         if data and data.get('success'):
             log(f"账号 {self.account_index} - ✅ 领取成功")
-            return True
+            return True, "成功"
         else:
             error_msg = data.get('message', '未知错误') if data else '请求失败'
-            log(f"账号 {self.account_index} - ❌ 领取奖励失败: {error_msg}")
-            return False
+            log(f"账号 {self.account_index} - ❌ 领取周奖失败: {error_msg}")
+            return False, error_msg
     
     def calculate_jindou_difference(self):
         """计算金豆差值"""
         self.jindou_reward = self.final_jindou - self.initial_jindou
         if self.jindou_reward > 0:
             reward_text = f" (+{self.jindou_reward})"
-            if self.has_reward:
+            if self.has_weekly_reward:
+                reward_text += "（有周奖）"
+            if self.has_special_reward:
                 reward_text += "（有奖励）"
             log(f"账号 {self.account_index} - 🎉 总金豆增加: {self.initial_jindou} → {self.final_jindou}{reward_text}")
         elif self.jindou_reward == 0:
@@ -720,7 +867,8 @@ def sign_in_account(username, password, account_index, total_accounts, retry_cou
         'initial_jindou': 0,
         'final_jindou': 0,
         'jindou_reward': 0,
-        'has_jindou_reward': False,  # 金豆是否有额外奖励
+        'has_weekly_reward': False,  # 是否领取了普通7天奖励 (有周奖)
+        'has_special_reward': False, # 是否领取了特殊节点奖励 (有奖励)
         'token_extracted': False,
         'secretkey_extracted': False,
         'retry_count': retry_count,
@@ -729,7 +877,9 @@ def sign_in_account(username, password, account_index, total_accounts, retry_cou
         'backup_index': -1,  # 使用的备用密码索引，-1表示原密码
         'critical_error': False,  #标记严重错误（如多次调用依赖失败），需跳过重试
         'login_success': False,   # 标记开源平台登录是否成功
-        'jlc_login_success': False # 标记金豆签到的JLC登录是否成功
+        'jlc_login_success': False, # 标记金豆签到的JLC登录是否成功
+        'rule_violation': False,  # 标记是否违反签到规则
+        'unclaimed_reward': False # 标记是否存在签到未领取
     }
     
     # 显式创建临时目录用于 user-data-dir，以便后续清理
@@ -753,8 +903,7 @@ def sign_in_account(username, password, account_index, total_accounts, retry_cou
     
     driver = None
     
-    backup_passwords = [
-    ]
+    backup_passwords = []
 
     try:
         # 尝试初始化 Driver
@@ -1084,21 +1233,12 @@ def sign_in_account(username, password, account_index, total_accounts, retry_cou
                     if access_token and secretkey:
                         log(f"账号 {account_index} - ✅ 成功提取 token 和 secretkey")
                         
-                        global disable_global_proxy, consecutive_proxy_fails
+                        global disable_global_proxy
                         current_proxies = None
                         
-                        if not disable_global_proxy:
-                            current_proxies = get_valid_proxy(account_index)
-                            if current_proxies:
-                                consecutive_proxy_fails = 0
-                            else:
-                                consecutive_proxy_fails += 1
-                                if consecutive_proxy_fails >= 5:
-                                    disable_global_proxy = True
-                                    log("⚠ 连续5个账号代理获取失败，接下来的账号全部放弃使用代理！")
-                        else:
+                        if disable_global_proxy:
                             log(f"账号 {account_index} - ⚠ 已全局禁用代理，直接使用本地IP")
-
+                        
                         jlc_client = JLCClient(access_token, secretkey, account_index, driver, current_proxies)
                         jindou_success = jlc_client.execute_full_process()
                         
@@ -1108,12 +1248,17 @@ def sign_in_account(username, password, account_index, total_accounts, retry_cou
                         result['initial_jindou'] = jlc_client.initial_jindou
                         result['final_jindou'] = jlc_client.final_jindou
                         result['jindou_reward'] = jlc_client.jindou_reward
-                        result['has_jindou_reward'] = jlc_client.has_reward
+                        result['has_weekly_reward'] = jlc_client.has_weekly_reward
+                        result['has_special_reward'] = jlc_client.has_special_reward
                         
                         if jindou_success:
                             log(f"账号 {account_index} - ✅ 金豆签到流程完成")
                         else:
                             log(f"账号 {account_index} - ❌ 金豆签到流程失败")
+                            if "疑似违反签到规则" in jlc_client.message:
+                                result['rule_violation'] = True
+                            if "存在签到未领取，请先领取!" in jlc_client.message:
+                                result['unclaimed_reward'] = True
                     else:
                         log(f"账号 {account_index} - ❌ 无法提取到 token 或 secretkey，跳过金豆签到")
                         result['jindou_status'] = 'Token提取失败'
@@ -1167,7 +1312,8 @@ def process_single_account(username, password, account_index, total_accounts):
         'initial_jindou': 0,
         'final_jindou': 0,
         'jindou_reward': 0,
-        'has_jindou_reward': False,
+        'has_weekly_reward': False,
+        'has_special_reward': False,
         'token_extracted': False,
         'secretkey_extracted': False,
         'retry_count': 0,  # 记录最后使用的retry_count
@@ -1176,7 +1322,9 @@ def process_single_account(username, password, account_index, total_accounts):
         'backup_index': -1,  # 使用的备用密码索引，-1表示原密码
         'critical_error': False,   # 标记严重错误
         'login_success': False,
-        'jlc_login_success': False
+        'jlc_login_success': False,
+        'rule_violation': False,   # 标记是否违反签到规则
+        'unclaimed_reward': False  # 标记是否存在签到未领取
     }
     
     merged_success = {'oshwhub': False, 'jindou': False}
@@ -1230,11 +1378,27 @@ def process_single_account(username, password, account_index, total_accounts):
             merged_result['initial_jindou'] = result['initial_jindou']
             merged_result['final_jindou'] = result['final_jindou']
             merged_result['jindou_reward'] = result['jindou_reward']
-            merged_result['has_jindou_reward'] = result['has_jindou_reward']
+            merged_result['has_weekly_reward'] = result['has_weekly_reward']
+            merged_result['has_special_reward'] = result['has_special_reward']
             # 更新实际密码信息（如果之前未更新）
             if merged_result['actual_password'] is None:
                 merged_result['actual_password'] = result['actual_password']
                 merged_result['backup_index'] = result['backup_index']
+        
+        # 即使签到失败，也保留已获取到的数据（用于显示）
+        if not merged_success['jindou']:
+            if result['initial_jindou'] > merged_result['initial_jindou']:
+                merged_result['initial_jindou'] = result['initial_jindou']
+            if result['final_jindou'] > merged_result['final_jindou']:
+                merged_result['final_jindou'] = result['final_jindou']
+            merged_result['jindou_status'] = result['jindou_status']
+            
+        if not merged_success['oshwhub']:
+            if result['initial_points'] > merged_result['initial_points']:
+                merged_result['initial_points'] = result['initial_points']
+            if result['final_points'] > merged_result['final_points']:
+                merged_result['final_points'] = result['final_points']
+            merged_result['oshwhub_status'] = result['oshwhub_status']
         
         # 更新其他字段（如果之前未知）
         if merged_result['nickname'] == '未知' and result['nickname'] != '未知':
@@ -1249,6 +1413,18 @@ def process_single_account(username, password, account_index, total_accounts):
         # 更新retry_count为最后一次尝试的
         merged_result['retry_count'] = result['retry_count']
         
+        # 检查是否疑似违反签到规则
+        if result.get('rule_violation'):
+            merged_result['rule_violation'] = True
+            log(f"账号 {account_index} - ❌ 签到接口提示疑似违反签到规则，该账号不进行重试，直接开始下一个账号")
+            break
+
+        # 检查是否存在奖励未领取
+        if result.get('unclaimed_reward'):
+            merged_result['unclaimed_reward'] = True
+            log(f"账号 {account_index} - ❌ 有程序无法处理的奖励未领取，该账号不进行重试，直接开始下一个账号")
+            break
+
         # 检查是否还需要重试（排除密码错误的情况）
         if not should_retry(merged_success, merged_result['password_error']) or attempt >= max_retries:
             break
@@ -1527,11 +1703,11 @@ def main():
         
         retry_label = ""
         if retry_count > 0:
-             retry_label = f" [重试{retry_count}次]"
+             retry_label = f"[重试{retry_count}次]"
         
         # 密码错误账号的特殊显示
         if password_error:
-            log(f"账号 {account_index} (未知) 详细结果: [密码错误]")
+            log(f"账号 {account_index} (未知) 详细结果:[密码错误]")
             log("  └── 状态: ❌ 账号或密码错误，跳过此账号")
         else:
             log(f"账号 {account_index} ({nickname}) 详细结果:{retry_label}")
@@ -1555,7 +1731,9 @@ def main():
                 
             if result['jindou_reward'] > 0:
                 jindou_text = f"  ├── 金豆变化: {result['initial_jindou']} → {result['final_jindou']} (+{result['jindou_reward']})"
-                if result['has_jindou_reward']:
+                if result.get('has_weekly_reward'):
+                    jindou_text += "（有周奖）"
+                if result.get('has_special_reward'):
                     jindou_text += "（有奖励）"
                 log(jindou_text)
                 total_jindou_reward += result['jindou_reward']
@@ -1640,6 +1818,47 @@ def main():
     else:
         log("✅ 没有使用非原密码的账号，无需生成 password-changed.txt")
     
+    # 保存结果到JSON文件，供汇总脚本使用
+    try:
+        result_data = {
+            'group_index': int(account_group) if account_group else 0,
+            'accounts':[]
+        }
+        
+        for i, result in enumerate(all_results):
+            username = usernames[result['account_index'] - 1]
+            account_data = {
+                'account_index': result['account_index'],
+                'username': username,
+                'nickname': result.get('nickname', '未知'),
+                'final_points': result['final_points'],
+                'initial_points': result['initial_points'],
+                'points_reward': result['points_reward'],
+                'oshwhub_success': result['oshwhub_success'],
+                'oshwhub_status': result['oshwhub_status'],
+                'final_jindou': result['final_jindou'],
+                'initial_jindou': result['initial_jindou'],
+                'jindou_reward': result['jindou_reward'],
+                'jindou_success': result['jindou_success'],
+                'jindou_status': result['jindou_status'],
+                'password_error': result.get('password_error', False),
+                'actual_password': result.get('actual_password'),
+                'has_weekly_reward': result.get('has_weekly_reward', False),
+                'has_special_reward': result.get('has_special_reward', False)
+            }
+            result_data['accounts'].append(account_data)
+        
+        # 使用账号组编号作为文件名的一部分
+        group_num = int(account_group) if account_group else 0
+        result_filename = f'jlc_result_{group_num}.json'
+        
+        with open(result_filename, 'w', encoding='utf-8') as f:
+            json.dump(result_data, f, ensure_ascii=False, indent=2)
+        
+        log(f"✅ 已生成结果文件: {result_filename}")
+    except Exception as e:
+        log(f"⚠ 保存结果文件失败: {e}")
+        
     # 根据失败退出标志决定退出码
     all_failed_accounts = failed_accounts + password_error_accounts
     if enable_failure_exit and all_failed_accounts:
